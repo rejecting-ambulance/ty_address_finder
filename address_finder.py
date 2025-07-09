@@ -1,11 +1,18 @@
 import re
+import os
+import json
+import unicodedata
+
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 import pandas as pd
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-import unicodedata
+
 
 def setup_chrome_driver():
     options = Options()
@@ -48,6 +55,12 @@ def setup_chrome_driver():
     driver = webdriver.Chrome(options=options)
     return driver
 
+def load_exception_rules(json_path='exception_rules.json'):
+    if os.path.exists(json_path):
+        with open(json_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {"require_ling": []}
+
 def wait_class_change(driver, element_id, origin_class, old_class, timeout=10):
     
     WebDriverWait(driver, timeout).until(
@@ -80,7 +93,7 @@ def search_address(driver, wait, address):
 
 def simplify_address(address):
     """
-    將地址簡化為：去除里、鄰與號後面的文字。
+    將地址簡化為：去除里、鄰與號後的文字，並將 '-' 替換為 '之'。
     回傳：(原地址, 簡化地址, 後綴)
     """
     original_address = address  # 保留原始輸入
@@ -107,6 +120,9 @@ def simplify_address(address):
         simplified = address
         suffix = ''
 
+    # 將簡化地址中的 '-' 取代為 '之'
+    simplified = simplified.replace('-', '之')
+
     return original_address.strip(), simplified.strip(), suffix.strip()
 
 
@@ -122,8 +138,20 @@ def fullwidth_to_halfwidth(text):
     return half_text
 
 def format_simplified_address(addr):
+    '''
+    結果格式化：
+    1. 數字轉半形
+    2. 去除空格
+    3. 將「-」轉回「之」
+    4. 去除「0」開頭的鄰編號，如 003鄰 ➜ 3鄰
+    5. 阿拉伯數字轉中文段號（1~9段）
+    
+    '''    
+    
     # 數字轉半形
     addr = fullwidth_to_halfwidth(addr)
+    addr = addr.replace(' ', '')  # 去除空格
+    addr = addr.replace('-', '之')  # 將「-」轉回「之」
 
     # 去除「0」開頭的鄰編號，如 003鄰 ➜ 3鄰
     addr = re.sub(r'(\D)0*(\d+)鄰', r'\1\2鄰', addr)
@@ -140,15 +168,14 @@ def format_simplified_address(addr):
 
     return addr.strip()
 
-
+EXCEPTION_RULES = load_exception_rules()
 def remove_ling_with_condition(full_address):
-    if "高上里" in full_address:
-        # 是高上里 → 不刪除
-        return full_address
-    else:
-        # 不是高上里 → 若有「里」和「鄰」，刪除「里」與「鄰」之間的所有字元（含「鄰」）
-        # 範例：AAA里SD鄰11路 → AAA里11路
-        return re.sub(r'(里).*?鄰', r'\1', full_address)
+    # 若地址中有例外名單的里，則不刪除
+    for special_li in EXCEPTION_RULES.get("require_ling", []):
+        if special_li in full_address:
+            return full_address
+    # 否則執行標準簡化：刪除「里」與「鄰」間文字（含鄰）
+    return re.sub(r'(里).*?鄰', r'\1', full_address)
 
 
 def process_no_result_address(original_address):
@@ -157,15 +184,15 @@ def process_no_result_address(original_address):
     高上里特殊處理：須有「鄰」才放至「不含鄰的地址」欄
     """
     if "里" in original_address:
-        # 如果是高上里，須有「鄰」才放到「不含鄰的地址」欄
-        if "高上里" in original_address:
-            if re.search(r'\d+鄰', original_address):
-                return original_address
-            else:
-                return "查詢失敗"
-        else:
-            # 其他有「里」的地址直接放入
-            return original_address
+        for special_li in EXCEPTION_RULES.get("require_ling", []):
+            if special_li in original_address:
+                # 例外里須包含「鄰」才能保留
+                if re.search(r'\d+鄰', original_address):
+                    return original_address
+                else:
+                    return "查詢失敗"
+        # 非例外里，只要有「里」就保留
+        return original_address
     else:
         return "查詢失敗"
 
@@ -185,65 +212,61 @@ def pad_text(text, target_width):
     return text + ' ' * max(pad_len, 0)
 
 def main(file_path):
+
+    
+
     df = pd.read_excel(file_path)
     addresses = df['查詢地址'].tolist()
     driver = setup_chrome_driver()
     wait = WebDriverWait(driver, 10)
 
-    full_addresses = []
-    simplified_addresses = []
+    # 開啟 Excel 用來逐筆寫入
+    wb = load_workbook(file_path)
+    ws = wb.active
 
-    # 先取最大地址長度，用來對齊箭頭
-    max_len = 50
+    max_len = 50  # 用來對齊箭頭
 
-    serial_numbers = []  # A 欄流水號
     for i, address in enumerate(addresses, start=1):
-        serial_numbers.append(i)
-
         if not address or str(address).strip() == 'nan':
             print(f"{i:04d}. 空白資料")
-            full_addresses.append("")
-            simplified_addresses.append("")
-            continue
+            full_address = ""
+            simplified = ""
+        else:
+            try:
+                data_address, shorter_address, last_address = simplify_address(address)
+                result_address = search_address(driver, wait, shorter_address)
 
-        try:
-            data_address, shorter_address, last_address = simplify_address(address)
-            result_address = search_address(driver, wait, shorter_address)
+                if result_address == "找不到結果":
+                    output = f"{i:04d}. {pad_text(address, max_len)} → 查無結果"
+                    print(output)
+                    full_address = "查無結果"
+                    simplified = process_no_result_address(data_address)
+                else:
+                    full_address = f'桃園市{result_address}{last_address}'
+                    full_address = fullwidth_to_halfwidth(full_address)
+                    output = f"{i:04d}. {pad_text(address, max_len)} → {full_address}"
+                    print(output)
+                    simplified = remove_ling_with_condition(full_address)
 
-            if result_address == "找不到結果":
-                output = f"{i:04d}. {pad_text(address, max_len)} → 查無結果"
-                print(output)
-                full_addresses.append("查無結果")
-                simplified = process_no_result_address(data_address)
-            else:
-                full_address = f'桃園市{result_address}{last_address}'
-                full_address = fullwidth_to_halfwidth(full_address)
-                output = f"{i:04d}. {pad_text(address, max_len)} → {full_address}"
-                print(output)
-                full_addresses.append(full_address)
-                simplified = remove_ling_with_condition(full_address)
+            except Exception as e:
+                print(f"{i:04d}. {pad_text(address, max_len)} → 查詢失敗")
+                full_address = "查詢失敗"
+                simplified = process_no_result_address(address)
 
-            formatted_simplified = format_simplified_address(simplified)
-            simplified_addresses.append(formatted_simplified)
+        # 統一簡化地址格式
+        formatted_simplified = format_simplified_address(simplified)
 
-        except Exception as e:
-            print(f"{i:04d}. {pad_text(address, max_len)} → 查詢失敗")
-            full_addresses.append("查詢失敗")
-            simplified = process_no_result_address(address)
-            formatted_simplified = format_simplified_address(simplified)
-            simplified_addresses.append(formatted_simplified)
+        # 寫入第 i+1 列（因為 Excel 有標題列）
+        ws.cell(row=i+1, column=1, value=i)  # A欄流水號
+        ws.cell(row=i+1, column=3, value=full_address)  # C欄：完整地址
+        ws.cell(row=i+1, column=4, value=formatted_simplified)  # D欄：不含鄰的地址
+
+        # 每筆處理完就儲存一次
+        wb.save(file_path)
 
     driver.quit()
-
-    # 寫入 Excel 前，補滿 A 欄序號（即第一欄）
-    # 補回序號（根據實際處理過的地址數）
-    df.iloc[:, 0] = list(range(1, len(addresses) + 1))
-
-    df['完整地址'] = full_addresses
-    df['不含鄰的地址'] = simplified_addresses
-    df.to_excel(file_path, index=False)
-    print(f"✅ 已完成，請查看：{file_path}")
-
+    print(f"✅ 全部完成，請查看：{file_path}")
+    os.startfile(file_path)
 
 if __name__ == '__main__':
     file_path = 'address_data.xlsx'
