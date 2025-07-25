@@ -173,9 +173,11 @@ def format_simplified_address(addr):
 EXCEPTION_RULES = load_exception_rules()
 def remove_ling_with_condition(full_address):
     # 若地址中有例外名單的里，則不刪除
+    '''
     for special_li in EXCEPTION_RULES.get("require_ling", []):
         if special_li in full_address:
             return full_address
+    '''
     # 否則執行標準簡化：刪除「里」與「鄰」間文字（含鄰）
     return re.sub(r'(里).*?鄰', r'\1', full_address)
 
@@ -249,10 +251,10 @@ def main():
                     full_address = f'桃園市{result_address}{last_address}'
                     full_address = fullwidth_to_halfwidth(full_address)
 
-                    '''                    
+                                        
                     simplified = remove_ling_with_condition(full_address)
                     formatted_simplified = format_simplified_address(simplified)
-                    '''
+                    
                     formatted_simplified = format_simplified_address(full_address)
 
 
@@ -261,8 +263,9 @@ def main():
                 simplified = process_no_result_address(data_address)
                 formatted_simplified = format_simplified_address(simplified)
 
+        simplified = remove_ling_with_condition(full_address)
 
-        output = f"{i:03d}. {pad_text(address, max_len)}\n   → {pad_text(full_address, max_len)}\n   → {pad_text(formatted_simplified, max_len)}"
+        output = f"{i:03d}. {pad_text(address, max_len)}\n   → {pad_text(formatted_simplified, max_len)}\n   → {pad_text(simplified, max_len)}"
         print(f'{output}\n')
 
         driver.quit()
