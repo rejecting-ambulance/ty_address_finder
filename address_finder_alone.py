@@ -98,9 +98,10 @@ def simplify_address(address):
     """
     original_address = address  # 保留原始輸入
 
-    # 移除「里」與「鄰」段
-    address = re.sub(r'[^ ]{1,5}里', '', address)
-    address = re.sub(r'\d{1,3}鄰', '', address)
+    # 移除「區」之後的 XX里（保留前後），避免誤刪區名
+    address = re.sub(r'([\u4e00-\u9fff]{1,5}區)[\u4e00-\u9fff]{1,2}里', r'\1', address)
+    # 移除 XXX鄰（1~3位數）但保留後面的地址（若有），可加入 lookahead 或結合 word boundary
+    address = re.sub(r'(\d{1,3})鄰', '', address)
 
     # 處理號後的尾端文字
     split_chars = ['號', '及', '、', '.']
@@ -122,7 +123,8 @@ def simplify_address(address):
 
     # 將簡化地址中的 '-' 取代為 '之'
     simplified = simplified.replace('-', '之')
-
+    
+    #print(f"原地址: {original_address}, 簡化地址: {simplified}, 後綴: {suffix}")
     return original_address.strip(), simplified.strip(), suffix.strip()
 
 
@@ -228,14 +230,16 @@ def main():
             print(f"{i}. 空白資料")
             full_address = ""
             simplified = ""
+            formatted_simplified = ""
         else:
             try:
                 data_address, shorter_address, last_address = simplify_address(address)
                 result_address = search_address(driver, wait, shorter_address)
 
                 if result_address == "找不到結果":
-                                        
+                    
                     full_address = "查無結果"
+                    
                     simplified = process_no_result_address(data_address)
                     formatted_simplified = format_simplified_address(simplified)
 
@@ -244,9 +248,12 @@ def main():
 
                     full_address = f'桃園市{result_address}{last_address}'
                     full_address = fullwidth_to_halfwidth(full_address)
-                                        
+
+                    '''                    
                     simplified = remove_ling_with_condition(full_address)
                     formatted_simplified = format_simplified_address(simplified)
+                    '''
+                    formatted_simplified = format_simplified_address(full_address)
 
 
             except Exception as e:
