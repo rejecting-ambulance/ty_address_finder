@@ -99,7 +99,7 @@ def simplify_address(address):
     original_address = address  # 保留原始輸入
 
     # 移除「里」與「鄰」段
-    address = re.sub(r'[^ ]{1,5}里', '', address)
+    address = re.sub(r'([\u4e00-\u9fff]{1,5}區)[\u4e00-\u9fff]{1,2}里', r'\1', address)
     address = re.sub(r'\d{1,3}鄰', '', address)
 
     # 處理號後的尾端文字
