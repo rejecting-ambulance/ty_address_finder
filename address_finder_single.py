@@ -18,6 +18,7 @@ def setup_chrome_driver():
     options.add_argument('--window-size=1920,1080')  # 確保元素能正確呈現
     options.add_argument('--disable-logging')  # 關閉日誌
     options.add_argument('--log-level=3')  # 只顯示致命錯誤
+    options.add_argument("--disable-software-rasterizer")
     options.add_argument('--disable-dev-shm-usage')  # 關閉開發者工具相關訊息
     options.add_argument('--disable-extensions')  # 關閉擴展相關訊息
     options.add_argument('--disable-web-security')  # 關閉網路安全警告
@@ -70,11 +71,32 @@ def wait_class_change(driver, element_id, origin_class, old_class, timeout=10):
         lambda d: d.find_element(By.ID, element_id).get_attribute('class') != old_class
     )
 
+def wait_mask_cycle(driver, mask_class='ext-el-mask', timeout=20):
+    """
+    等待遮罩出現再消失，用於等待查詢完成
+    """
+    try:
+        # Step 1. 等待遮罩出現
+        WebDriverWait(driver, timeout/2).until(
+            EC.presence_of_element_located((By.CLASS_NAME, mask_class))
+        )
+        #print("[INFO] 遮罩已出現，開始等待消失...")
+
+    except Exception:
+        print("[WARN] 查詢遮罩未出現（可能瞬間出現又消失）")
+
+    # Step 2. 等待遮罩消失
+    WebDriverWait(driver, timeout).until_not(
+        EC.presence_of_element_located((By.CLASS_NAME, mask_class))
+    )
+    #print("[INFO] 遮罩已消失，查詢完成。")
+
 
 def search_address(driver, wait, address):
     driver.get('https://addressrs.moi.gov.tw/address/index.cfm?city_id=68000')
     address_box = wait.until(EC.presence_of_element_located((By.ID, 'FreeText_ADDR')))
-    submit_button = driver.find_element(By.ID, 'ext-comp-1010')
+    #submit_button = driver.find_element(By.ID, 'ext-comp-1010')
+    submit_button = driver.find_element(By.ID, 'ext-gen51')
 
     address_box.clear()
     address_box.send_keys(address)
@@ -83,10 +105,11 @@ def search_address(driver, wait, address):
     # 原表單wait
     #wait.until(EC.presence_of_element_located((By.XPATH, '//*[@id="ext-gen107"]/div[1]/table/tbody/tr/td[2]/div')))
     
-    wait_class_change(driver, 'ext-gen97', 'x-panel-bwrap', 'x-panel-bwrap x-masked-relative x-masked')
-    
+    #wait_class_change(driver, 'ext-gen97', 'x-panel-bwrap', 'x-panel-bwrap x-masked-relative x-masked')
+    wait_mask_cycle(driver)
     try:
-        result = driver.find_element(By.XPATH, '//*[@id="ext-gen107"]/div/table/tbody/tr/td[2]/div')
+        #result = driver.find_element(By.XPATH, '//*[@id="ext-gen107"]/div/table/tbody/tr/td[2]/div')
+        result = driver.find_element(By.XPATH, '//*[@id="ext-gen111"]/div/table/tbody/tr/td[2]/div')
         return result.text.strip()
     except:
         return "找不到結果"
@@ -154,6 +177,7 @@ def format_simplified_address(addr):
     addr = fullwidth_to_halfwidth(addr)
     addr = addr.replace(' ', '')  # 去除空格
     addr = addr.replace('-', '之')  # 將「-」轉回「之」
+    addr = addr.replace(',', '，')  # 半形「,」轉回「，」
 
     # 去除「0」開頭的鄰編號，如 003鄰 ➜ 3鄰
     addr = re.sub(r'(\D)0*(\d+)鄰', r'\1\2鄰', addr)
@@ -244,6 +268,7 @@ def main():
                     
                     full_address = "查無結果"
                     
+                    
                     simplified = process_no_result_address(data_address)
                     formatted_simplified = format_simplified_address(simplified)
 
@@ -253,10 +278,8 @@ def main():
                     full_address = f'桃園市{result_address}{last_address}'
                     full_address = fullwidth_to_halfwidth(full_address)
 
-                                        
                     simplified = remove_ling_with_condition(full_address)
-                    formatted_simplified = format_simplified_address(simplified)
-                    
+                    #formatted_simplified = format_simplified_address(simplified)
                     formatted_simplified = format_simplified_address(full_address)
 
 
@@ -276,4 +299,3 @@ def main():
 if __name__ == '__main__':
 
     main()
-

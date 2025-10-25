@@ -2,10 +2,10 @@ import re
 import os
 import json
 import unicodedata
+import time
 
 from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
-import pandas as pd
+#import pandas as pd
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -18,10 +18,11 @@ def setup_chrome_driver():
     options = Options()
     options.add_argument('--headless=new')  # 使用新版 headless 模式（更穩定）
     options.add_argument('--disable-gpu')   # Windows上有時必須加
-    options.add_argument('--no-sandbox')    # 如果你在 Linux 或 Docker 中沒權限時加
+    options.add_argument('--no-sandbox')    # 如果sable-dev-shm-us你在 Linux 或 Docker 中沒權限時加
     options.add_argument('--window-size=1920,1080')  # 確保元素能正確呈現
     options.add_argument('--disable-logging')  # 關閉日誌
     options.add_argument('--log-level=3')  # 只顯示致命錯誤
+    options.add_argument("--disable-software-rasterizer")
     options.add_argument('--disable-dev-shm-usage')  # 關閉開發者工具相關訊息
     options.add_argument('--disable-extensions')  # 關閉擴展相關訊息
     options.add_argument('--disable-web-security')  # 關閉網路安全警告
@@ -70,11 +71,32 @@ def wait_class_change(driver, element_id, origin_class, old_class, timeout=10):
         lambda d: d.find_element(By.ID, element_id).get_attribute('class') != old_class
     )
 
+def wait_mask_cycle(driver, mask_class='ext-el-mask', timeout=20):
+    """
+    等待遮罩出現再消失，用於等待查詢完成
+    """
+    try:
+        # Step 1. 等待遮罩出現
+        WebDriverWait(driver, timeout/2).until(
+            EC.presence_of_element_located((By.CLASS_NAME, mask_class))
+        )
+        #print("[INFO] 遮罩已出現，開始等待消失...")
+
+    except Exception:
+        print("[WARN] 查詢遮罩未出現（可能瞬間出現又消失）")
+
+    # Step 2. 等待遮罩消失
+    WebDriverWait(driver, timeout).until_not(
+        EC.presence_of_element_located((By.CLASS_NAME, mask_class))
+    )
+    #print("[INFO] 遮罩已消失，查詢完成。")
+
 
 def search_address(driver, wait, address):
     driver.get('https://addressrs.moi.gov.tw/address/index.cfm?city_id=68000')
     address_box = wait.until(EC.presence_of_element_located((By.ID, 'FreeText_ADDR')))
-    submit_button = driver.find_element(By.ID, 'ext-comp-1010')
+    #submit_button = driver.find_element(By.ID, 'ext-comp-1010')
+    submit_button = driver.find_element(By.ID, 'ext-gen51')
 
     address_box.clear()
     address_box.send_keys(address)
@@ -83,12 +105,15 @@ def search_address(driver, wait, address):
     # 原表單wait
     #wait.until(EC.presence_of_element_located((By.XPATH, '//*[@id="ext-gen107"]/div[1]/table/tbody/tr/td[2]/div')))
     
-    wait_class_change(driver, 'ext-gen97', 'x-panel-bwrap', 'x-panel-bwrap x-masked-relative x-masked')
-    
+    #wait_class_change(driver, 'ext-gen97', 'x-panel-bwrap', 'x-panel-bwrap x-masked-relative x-masked')
+    wait_mask_cycle(driver)
+
     try:
-        result = driver.find_element(By.XPATH, '//*[@id="ext-gen107"]/div/table/tbody/tr/td[2]/div')
+        #result = driver.find_element(By.XPATH, '//*[@id="ext-gen107"]/div/table/tbody/tr/td[2]/div')
+        result = driver.find_element(By.XPATH, '//*[@id="ext-gen111"]/div/table/tbody/tr/td[2]/div')
         return result.text.strip()
-    except:
+    except Exception as e:
+        print(f"Error finding result: {e}")
         return "找不到結果"
 
 def simplify_address(address):
@@ -152,6 +177,7 @@ def format_simplified_address(addr):
     addr = fullwidth_to_halfwidth(addr)
     addr = addr.replace(' ', '')  # 去除空格
     addr = addr.replace('-', '之')  # 將「-」轉回「之」
+    addr = addr.replace(',', '，')  # 半形「,」轉回「，」
 
     # 去除「0」開頭的鄰編號，如 003鄰 ➜ 3鄰
     addr = re.sub(r'(\D)0*(\d+)鄰', r'\1\2鄰', addr)
@@ -169,6 +195,8 @@ def format_simplified_address(addr):
     return addr.strip()
 
 EXCEPTION_RULES = load_exception_rules()
+#print("Loaded Exception Rules:", EXCEPTION_RULES)
+
 def remove_ling_with_condition(full_address):
     # 若地址中有例外名單的里，則不刪除
     for special_li in EXCEPTION_RULES.get("require_ling", []):
@@ -211,12 +239,17 @@ def pad_text(text, target_width):
     pad_len = target_width - visual_len(text)
     return text + ' ' * max(pad_len, 0)
 
+def read_addresses(file_path):
+    wb = load_workbook(file_path)
+    ws = wb.active
+    return [ws.cell(row=i, column=2).value for i in range(2, ws.max_row + 1)]
+
 def main(file_path):
 
-    
+    #df = pd.read_excel(file_path)
+    #addresses = df['查詢地址'].tolist()
+    addresses = read_addresses(file_path)
 
-    df = pd.read_excel(file_path)
-    addresses = df['查詢地址'].tolist()
     driver = setup_chrome_driver()
     wait = WebDriverWait(driver, 10)
 
@@ -232,6 +265,7 @@ def main(file_path):
             full_address = ""
             simplified = ""
         else:
+            time.sleep(5)
             try:
                 data_address, shorter_address, last_address = simplify_address(address)
                 result_address = search_address(driver, wait, shorter_address)
@@ -244,6 +278,7 @@ def main(file_path):
                 else:
                     full_address = f'桃園市{result_address}{last_address}'
                     full_address = fullwidth_to_halfwidth(full_address)
+                    full_address = full_address.replace(',', '，')
                     output = f"{i:04d}. {pad_text(address, max_len)} → {full_address}"
                     print(output)
                     simplified = remove_ling_with_condition(full_address)
@@ -271,4 +306,3 @@ def main(file_path):
 if __name__ == '__main__':
     file_path = 'address_data.xlsx'
     main(file_path)
-
