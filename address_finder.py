@@ -208,18 +208,10 @@ def remove_ling_with_condition(full_address):
 def process_no_result_address(original_address):
     """
     處理查無結果的地址：如果原地址有「里」，直接放到「不含鄰的地址」欄
-    高上里特殊處理：須有「鄰」才放至「不含鄰的地址」欄
     """
     if "里" in original_address:
-        '''
-        for special_li in EXCEPTION_RULES.get("require_ling", []):
-            if special_li in original_address:
-                # 例外里須包含「鄰」才能保留
-                if re.search(r'\d+鄰', original_address):
-                    return original_address
-                else:
-                    return "查詢失敗"
-        '''
+        if "桃園市" not in original_address:
+            original_address = f'桃園市{original_address}'
         # 非例外里，只要有「里」就保留
         return original_address
     else:
@@ -244,6 +236,47 @@ def read_addresses(file_path):
     wb = load_workbook(file_path)
     ws = wb.active
     return [ws.cell(row=i, column=2).value for i in range(2, ws.max_row + 1)]
+
+def jurisdiction_check():
+    # 取得程式執行目錄
+    folder_path = os.getcwd()
+
+    # 檔案名稱
+    target_file = os.path.join(folder_path, "責任區.xlsx")
+    source_file = os.path.join(folder_path, "address_data.xlsx")
+
+    if os.path.exists(target_file) and os.path.exists(source_file):
+        # 開啟 address_data.xlsx
+        wb_source = load_workbook(source_file)
+        ws_source = wb_source.active  # 假設資料在第一個工作表
+
+        # 開啟責任區.xlsx
+        wb_target = load_workbook(target_file)
+        
+        # 如果工作表不存在就建立
+        if "程式用" in wb_target.sheetnames:
+            ws_target = wb_target["程式用"]
+        else:
+            ws_target = wb_target.create_sheet("程式用")
+        
+        # 清空目標工作表的 A~D 欄舊資料（可選）
+        for row in ws_target.iter_rows(min_col=1, max_col=4, max_row=ws_target.max_row):
+            for cell in row:
+                cell.value = None
+
+        # 取得 source A~D 欄資料並寫入
+        for row_idx, row in enumerate(ws_source.iter_rows(min_col=1, max_col=4), start=1):
+            for col_idx, cell in enumerate(row, start=1):
+                ws_target.cell(row=row_idx, column=col_idx, value=cell.value)
+        
+        # 儲存修改
+        wb_target.save(target_file)
+        print("✅ 已更新責任區")
+        os.startfile(jurisdiction_path)
+    else:
+        None
+        #print("資料夾內缺少必要檔案：責任區.xlsx 或 address_data.xlsx")
+
 
 def main(file_path):
 
@@ -273,13 +306,14 @@ def main(file_path):
 
                 if result_address == "找不到結果":
                     
-                    full_address = "查無結果"
                     simplified = process_no_result_address(data_address)
                     simplified = remove_ling_with_condition(simplified)
 
                     if "里" in simplified:
-                        output = f"{i:04d}. {pad_text(address, max_len)} → {simplified}(查無結果，使用原地址)"
+                        full_address = "查無結果，使用原里鄰"
+                        output = f"{i:04d}. {pad_text(address, max_len)} → {simplified}(查無結果，使用原里鄰)"
                     else:
+                        full_address = "查無結果"
                         output = f"{i:04d}. {pad_text(address, max_len)} → 查無結果"
 
                     print(output)
@@ -312,7 +346,11 @@ def main(file_path):
     driver.quit()
     print(f"✅ 查詢結束，請查看：{file_path}")
     os.startfile(file_path)
+    jurisdiction_check()
 
 if __name__ == '__main__':
     file_path = 'address_data.xlsx'
+    jurisdiction_path = '責任區.xlsx'
     main(file_path)
+    
+    
