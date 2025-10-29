@@ -3,6 +3,7 @@ import os
 import json
 import unicodedata
 import time
+import logging
 
 from openpyxl import load_workbook
 #import pandas as pd
@@ -16,52 +17,43 @@ from selenium.webdriver.chrome.options import Options
 
 def setup_chrome_driver():
     options = Options()
-    options.add_argument('--headless=new')  # 使用新版 headless 模式（更穩定）
-    options.add_argument('--disable-gpu')   # Windows上有時必須加
-    options.add_argument('--no-sandbox')    # 如果sable-dev-shm-us你在 Linux 或 Docker 中沒權限時加
-    options.add_argument('--window-size=1920,1080')  # 確保元素能正確呈現
-    options.add_argument('--disable-logging')  # 關閉日誌
-    options.add_argument('--log-level=3')  # 只顯示致命錯誤
-    options.add_argument("--disable-software-rasterizer")
-    options.add_argument('--disable-dev-shm-usage')  # 關閉開發者工具相關訊息
-    options.add_argument('--disable-extensions')  # 關閉擴展相關訊息
-    options.add_argument('--disable-web-security')  # 關閉網路安全警告
-    options.add_argument('--disable-features=VizDisplayCompositor')  # 關閉顯示相關警告
-    options.add_argument('--silent')  # 靜默模式
-    options.add_argument('--disable-crash-reporter')  # 關閉崩潰報告
-    options.add_argument('--disable-in-process-stack-traces')  # 關閉進程內堆疊追蹤
-    options.add_argument('--disable-dev-tools')  # 關閉開發者工具
-    options.add_argument('--disable-background-timer-throttling')  # 關閉背景計時器
-    options.add_argument('--disable-renderer-backgrounding')  # 關閉渲染器背景化
-    options.add_argument('--disable-backgrounding-occluded-windows')  # 關閉被遮蔽視窗的背景化
-    options.add_argument('--disable-ipc-flooding-protection')  # 關閉IPC洪水保護
-    options.add_experimental_option('excludeSwitches', ['enable-logging'])  # 排除日誌開關
-    options.add_experimental_option('useAutomationExtension', False)  # 關閉自動化擴展
-    
-    # 關閉瀏覽器日誌
-    options.add_experimental_option('excludeSwitches', ['enable-automation'])
+
+    # --- Headless 模式設定 ---
+    options.add_argument('--headless=new')  # 啟用新版無頭模式，模擬真實瀏覽器但不開視窗
+    options.add_argument('--disable-gpu')   # 關閉 GPU 加速，避免在部分環境下造成錯誤
+    options.add_argument('--no-sandbox')    # 解除沙盒限制（Linux/Docker 無權限環境必加）
+    options.add_argument('--disable-dev-shm-usage')  # 避免 /dev/shm 空間不足導致崩潰（Docker 常見）
+    options.add_argument('--window-size=1920,1080')  # 指定視窗大小，確保頁面元素完整載入可見
+
+    # --- 日誌與自動化提示設定 ---
+    # 排除特定開關，以隱藏「Chrome 正在受自動化控制」提示及多餘的 console log
+    options.add_experimental_option(
+        'excludeSwitches', 
+        ['enable-logging', 'enable-automation']
+    )
+
+    # 關閉 Chrome 自動化擴展功能（減少被網站偵測的機率）
     options.add_experimental_option('useAutomationExtension', False)
-    
-    # 設定日誌級別
-    import logging
-    import os
-    
-    # 設定環境變數來抑制Chrome的錯誤訊息
-    os.environ['CHROME_LOG_FILE'] = 'NUL'  # Windows
-    # os.environ['CHROME_LOG_FILE'] = '/dev/null'  # Linux/Mac 請用這行替換上面一行
-    
+
+    # --- 系統級日誌抑制設定 ---
+    # 將 Chrome 的內部 log 輸出導向無效位置
+    os.environ['CHROME_LOG_FILE'] = 'NUL'  # Windows 使用 NUL
+    # os.environ['CHROME_LOG_FILE'] = '/dev/null'  # Linux/Mac 使用 /dev/null
+
+    # 降低 Selenium 與 urllib3 的日誌輸出層級，只顯示警告以上訊息
     logging.getLogger('selenium').setLevel(logging.WARNING)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    driver = webdriver.Chrome(options=options)
-    return driver
+    # 建立並回傳 WebDriver 物件
+    return webdriver.Chrome(options=options)
 
-def load_exception_rules(json_path='exception_rules.json'):
+def load_exception_rules(json_path='exception_rules.json'): # 排除特定里鄰規則
     if os.path.exists(json_path):
         with open(json_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     return {"require_ling": []}
 
+''' # 原本的等待 class 變化函式，改用 wait_mask_cycle
 def wait_class_change(driver, element_id, origin_class, old_class, timeout=10):
     
     WebDriverWait(driver, timeout).until(
@@ -70,6 +62,8 @@ def wait_class_change(driver, element_id, origin_class, old_class, timeout=10):
     WebDriverWait(driver, timeout).until(
         lambda d: d.find_element(By.ID, element_id).get_attribute('class') != old_class
     )
+'''
+
 
 def wait_mask_cycle(driver, mask_class='ext-el-mask', timeout=20):
     """
@@ -82,8 +76,8 @@ def wait_mask_cycle(driver, mask_class='ext-el-mask', timeout=20):
         )
         #print("[INFO] 遮罩已出現，開始等待消失...")
 
-    except Exception:
-        print("[WARN] 查詢遮罩未出現（可能瞬間出現又消失）")
+    except Exception:   # 查詢遮罩未出現（可能瞬間出現又消失）
+        print("[WARN] 查詢遮罩未出現")
 
     # Step 2. 等待遮罩消失
     WebDriverWait(driver, timeout).until_not(
@@ -116,7 +110,7 @@ def search_address(driver, wait, address):
         print(f"Error finding result: {e}")
         return "找不到結果"
 
-def simplify_address(address):
+def simplify_address(address):  # 查詢前地址簡化
     """
     將地址簡化為：去除里、鄰與號後的文字，並將 '-' 替換為 '之'。
     回傳：(原地址, 簡化地址, 後綴)
@@ -152,6 +146,9 @@ def simplify_address(address):
 
 
 def fullwidth_to_halfwidth(text):
+    '''
+        全形轉半形
+    '''
     half_text = ''
     for char in text:
         code = ord(char)
@@ -167,7 +164,7 @@ def format_simplified_address(addr):
     結果格式化：
     1. 數字轉半形
     2. 去除空格
-    3. 將「-」轉回「之」
+    3. 將「-」轉回「之」、「,」轉回「，」
     4. 去除「0」開頭的鄰編號，如 003鄰 ➜ 3鄰
     5. 阿拉伯數字轉中文段號（1~9段）
     
@@ -198,10 +195,12 @@ EXCEPTION_RULES = load_exception_rules()
 #print("Loaded Exception Rules:", EXCEPTION_RULES)
 
 def remove_ling_with_condition(full_address):
-    # 若地址中有例外名單的里，則不刪除
+    # 名單內的里，保留鄰
+
     for special_li in EXCEPTION_RULES.get("require_ling", []):
         if special_li in full_address:
             return full_address
+        
     # 否則執行標準簡化：刪除「里」與「鄰」間文字（含鄰）
     return re.sub(r'(里).*?鄰', r'\1', full_address)
 
@@ -212,6 +211,7 @@ def process_no_result_address(original_address):
     高上里特殊處理：須有「鄰」才放至「不含鄰的地址」欄
     """
     if "里" in original_address:
+        '''
         for special_li in EXCEPTION_RULES.get("require_ling", []):
             if special_li in original_address:
                 # 例外里須包含「鄰」才能保留
@@ -219,6 +219,7 @@ def process_no_result_address(original_address):
                     return original_address
                 else:
                     return "查詢失敗"
+        '''
         # 非例外里，只要有「里」就保留
         return original_address
     else:
@@ -265,23 +266,32 @@ def main(file_path):
             full_address = ""
             simplified = ""
         else:
-            time.sleep(5)
+            time.sleep(1.2)  # 避免查詢過快被擋
             try:
                 data_address, shorter_address, last_address = simplify_address(address)
                 result_address = search_address(driver, wait, shorter_address)
 
                 if result_address == "找不到結果":
-                    output = f"{i:04d}. {pad_text(address, max_len)} → 查無結果"
-                    print(output)
+                    
                     full_address = "查無結果"
                     simplified = process_no_result_address(data_address)
+                    simplified = remove_ling_with_condition(simplified)
+
+                    if "里" in simplified:
+                        output = f"{i:04d}. {pad_text(address, max_len)} → {simplified}(查無結果，使用原地址)"
+                    else:
+                        output = f"{i:04d}. {pad_text(address, max_len)} → 查無結果"
+
+                    print(output)
                 else:
                     full_address = f'桃園市{result_address}{last_address}'
                     full_address = fullwidth_to_halfwidth(full_address)
                     full_address = full_address.replace(',', '，')
+
+                    simplified = remove_ling_with_condition(full_address)
+
                     output = f"{i:04d}. {pad_text(address, max_len)} → {full_address}"
                     print(output)
-                    simplified = remove_ling_with_condition(full_address)
 
             except Exception as e:
                 print(f"{i:04d}. {pad_text(address, max_len)} → 查詢失敗")
@@ -300,7 +310,7 @@ def main(file_path):
         wb.save(file_path)
 
     driver.quit()
-    print(f"✅ 全部完成，請查看：{file_path}")
+    print(f"✅ 查詢結束，請查看：{file_path}")
     os.startfile(file_path)
 
 if __name__ == '__main__':
