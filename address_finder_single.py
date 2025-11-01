@@ -1,6 +1,6 @@
 import re
-#import os
-#import json
+import os
+import logging
 import unicodedata
 
 from selenium import webdriver
@@ -12,54 +12,35 @@ from selenium.webdriver.chrome.options import Options
 
 def setup_chrome_driver():
     options = Options()
-    options.add_argument('--headless=new')  # 使用新版 headless 模式（更穩定）
-    options.add_argument('--disable-gpu')   # Windows上有時必須加
-    options.add_argument('--no-sandbox')    # 如果你在 Linux 或 Docker 中沒權限時加
-    options.add_argument('--window-size=1920,1080')  # 確保元素能正確呈現
-    options.add_argument('--disable-logging')  # 關閉日誌
-    options.add_argument('--log-level=3')  # 只顯示致命錯誤
-    options.add_argument("--disable-software-rasterizer")
-    options.add_argument('--disable-dev-shm-usage')  # 關閉開發者工具相關訊息
-    options.add_argument('--disable-extensions')  # 關閉擴展相關訊息
-    options.add_argument('--disable-web-security')  # 關閉網路安全警告
-    options.add_argument('--disable-features=VizDisplayCompositor')  # 關閉顯示相關警告
-    options.add_argument('--silent')  # 靜默模式
-    options.add_argument('--disable-crash-reporter')  # 關閉崩潰報告
-    options.add_argument('--disable-in-process-stack-traces')  # 關閉進程內堆疊追蹤
-    options.add_argument('--disable-dev-tools')  # 關閉開發者工具
-    options.add_argument('--disable-background-timer-throttling')  # 關閉背景計時器
-    options.add_argument('--disable-renderer-backgrounding')  # 關閉渲染器背景化
-    options.add_argument('--disable-backgrounding-occluded-windows')  # 關閉被遮蔽視窗的背景化
-    options.add_argument('--disable-ipc-flooding-protection')  # 關閉IPC洪水保護
-    options.add_experimental_option('excludeSwitches', ['enable-logging'])  # 排除日誌開關
-    options.add_experimental_option('useAutomationExtension', False)  # 關閉自動化擴展
-    
-    # 關閉瀏覽器日誌
-    options.add_experimental_option('excludeSwitches', ['enable-automation'])
+
+    # --- Headless 模式設定 ---
+    options.add_argument('--headless=new')  # 啟用新版無頭模式，模擬真實瀏覽器但不開視窗
+    options.add_argument('--disable-gpu')   # 關閉 GPU 加速，避免在部分環境下造成錯誤
+    options.add_argument('--no-sandbox')    # 解除沙盒限制（Linux/Docker 無權限環境必加）
+    options.add_argument('--disable-dev-shm-usage')  # 避免 /dev/shm 空間不足導致崩潰（Docker 常見）
+    options.add_argument('--window-size=1920,1080')  # 指定視窗大小，確保頁面元素完整載入可見
+
+    # --- 日誌與自動化提示設定 ---
+    # 排除特定開關，以隱藏「Chrome 正在受自動化控制」提示及多餘的 console log
+    options.add_experimental_option(
+        'excludeSwitches', 
+        ['enable-logging', 'enable-automation']
+    )
+
+    # 關閉 Chrome 自動化擴展功能（減少被網站偵測的機率）
     options.add_experimental_option('useAutomationExtension', False)
-    
-    # 設定日誌級別
-    import logging
-    #import os
-    
-    # 設定環境變數來抑制Chrome的錯誤訊息
-    #os.environ['CHROME_LOG_FILE'] = 'NUL'  # Windows
-    # os.environ['CHROME_LOG_FILE'] = '/dev/null'  # Linux/Mac 請用這行替換上面一行
-    
+
+    # --- 系統級日誌抑制設定 ---
+    # 將 Chrome 的內部 log 輸出導向無效位置
+    os.environ['CHROME_LOG_FILE'] = 'NUL'  # Windows 使用 NUL
+    # os.environ['CHROME_LOG_FILE'] = '/dev/null'  # Linux/Mac 使用 /dev/null
+
+    # 降低 Selenium 與 urllib3 的日誌輸出層級，只顯示警告以上訊息
     logging.getLogger('selenium').setLevel(logging.WARNING)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    driver = webdriver.Chrome(options=options)
-    return driver
-
-
-'''
-def load_exception_rules(json_path='exception_rules.json'):
-    if os.path.exists(json_path):
-        with open(json_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {"require_ling": []}
-'''
+    # 建立並回傳 WebDriver 物件
+    return webdriver.Chrome(options=options)
 
 
 def wait_class_change(driver, element_id, origin_class, old_class, timeout=10):
@@ -255,10 +236,12 @@ def main():
         max_len = 55  # 用來對齊箭頭
 
         if not address or str(address).strip() == '':
-            print(f"{i}. 空白資料")
+            print(f"{i}. 空白資料，結束查詢。")
             full_address = ""
             simplified = ""
             formatted_simplified = ""
+            break
+        
         else:
             try:
                 data_address, shorter_address, last_address = simplify_address(address)
@@ -268,18 +251,15 @@ def main():
                     
                     full_address = "查無結果"
                     
-                    
                     simplified = process_no_result_address(data_address)
                     formatted_simplified = format_simplified_address(simplified)
 
-                    
                 else:
 
                     full_address = f'桃園市{result_address}{last_address}'
                     full_address = fullwidth_to_halfwidth(full_address)
 
                     simplified = remove_ling_with_condition(full_address)
-                    #formatted_simplified = format_simplified_address(simplified)
                     formatted_simplified = format_simplified_address(full_address)
 
 

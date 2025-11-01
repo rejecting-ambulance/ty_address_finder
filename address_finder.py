@@ -237,13 +237,13 @@ def read_addresses(file_path):
     ws = wb.active
     return [ws.cell(row=i, column=2).value for i in range(2, ws.max_row + 1)]
 
-def jurisdiction_check():
+def jurisdiction_check(data_path = "address_data.xlsx",jurisdiction_path='責任區.xlsx'):
     # 取得程式執行目錄
     folder_path = os.getcwd()
 
     # 檔案名稱
-    target_file = os.path.join(folder_path, "責任區.xlsx")
-    source_file = os.path.join(folder_path, "address_data.xlsx")
+    target_file = os.path.join(folder_path, jurisdiction_path)
+    source_file = os.path.join(folder_path, data_path)
 
     if os.path.exists(target_file) and os.path.exists(source_file):
         # 開啟 address_data.xlsx
@@ -271,14 +271,13 @@ def jurisdiction_check():
         
         # 儲存修改
         wb_target.save(target_file)
-        print("✅ 已更新責任區")
-        os.startfile(jurisdiction_path)
+        return True
     else:
         None
         #print("資料夾內缺少必要檔案：責任區.xlsx 或 address_data.xlsx")
 
 
-def main(file_path):
+def main(file_path = "address_data.xlsx", jurisdiction_path = "責任區.xlsx"):
 
     #df = pd.read_excel(file_path)
     #addresses = df['查詢地址'].tolist()
@@ -344,13 +343,18 @@ def main(file_path):
         wb.save(file_path)
 
     driver.quit()
-    print(f"✅ 查詢結束，請查看：{file_path}")
-    os.startfile(file_path)
-    jurisdiction_check()
+
+    if(jurisdiction_check()):
+        print(f"✅ 責任區已更新，請查看：{jurisdiction_path}")
+        os.startfile(jurisdiction_path)
+    else:
+        print(f"✅ 查詢結束，請查看：{file_path}")
+        os.startfile(file_path)
+
 
 if __name__ == '__main__':
     file_path = 'address_data.xlsx'
     jurisdiction_path = '責任區.xlsx'
-    main(file_path)
+    main(file_path, jurisdiction_path)
     
     
