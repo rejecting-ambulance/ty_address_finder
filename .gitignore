@@ -2,7 +2,8 @@ build/
 dist/
 *.spec
 
-
+address_finder/
+_internal/
 
 *.7z
 *.exe
