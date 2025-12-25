@@ -8,6 +8,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+import subprocess
 
 
 def setup_chrome_driver():
@@ -32,15 +34,29 @@ def setup_chrome_driver():
 
     # --- 系統級日誌抑制設定 ---
     # 將 Chrome 的內部 log 輸出導向無效位置
-    os.environ['CHROME_LOG_FILE'] = 'NUL'  # Windows 使用 NUL
-    # os.environ['CHROME_LOG_FILE'] = '/dev/null'  # Linux/Mac 使用 /dev/null
+    os.environ['CHROME_LOG_FILE'] = os.devnull  # 使用平台相容的 devnull
 
     # 降低 Selenium 與 urllib3 的日誌輸出層級，只顯示警告以上訊息
     logging.getLogger('selenium').setLevel(logging.WARNING)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-    # 建立並回傳 WebDriver 物件
-    return webdriver.Chrome(options=options)
+    # 建立並回傳 WebDriver 物件，使用 Service 隱藏 chromedriver 控制台視窗
+    try:
+        creationflags = subprocess.CREATE_NO_WINDOW
+    except Exception:
+        creationflags = 0
+
+    service = Service(log_path=os.devnull)
+    try:
+        service.creationflags = creationflags
+    except Exception:
+        pass
+
+    # 額外參數以降低 Chrome GPU 與 log 噪音
+    options.add_argument('--log-level=3')
+    options.add_argument('--disable-software-rasterizer')
+
+    return webdriver.Chrome(service=service, options=options)
 
 
 def wait_class_change(driver, element_id, origin_class, old_class, timeout=10):
@@ -97,18 +113,20 @@ def search_address(driver, wait, address):
 
 def simplify_address(address):
     """
-    將地址簡化為：去除里、鄰與號後的文字，並將 '-' 替換為 '之'。
-    回傳：(原地址, 簡化地址, 後綴)
+    簡化輸入地址，供後續查詢用。
+
+    進函式時先將全形數字轉為半形，並移除里/鄰；
+    處理路/街與段、號之間的中文/阿拉伯數字之轉換（逐字或簡單單位解析），
+    並去除號前之前導零。回傳 (original, simplified, suffix)。
     """
-    original_address = address  # 保留原始輸入
+    original_address = address
 
-    # 移除「區」之後的 XX里（保留前後），避免誤刪區名
+    # 進函式時先將全形數字轉為半形，方便後續處理
+    address = fullwidth_to_halfwidth(address)
+
+    # 移除「里」與「鄰」段
     address = re.sub(r'([\u4e00-\u9fff]{1,5}區)[\u4e00-\u9fff]{1,2}里', r'\1', address)
-    # 移除 XXX鄰（1~3位數）但保留後面的地址（若有），可加入 lookahead 或結合 word boundary
-    address = re.sub(r'(\d{1,3})鄰', '', address)
-
-    # 將簡化地址中的 '-' 取代為 '之'
-    address = address.replace('-', '之')
+    address = re.sub(r'\d{1,3}鄰', '', address)
 
     # 處理號後的尾端文字
     split_chars = ['號', '及', '、', '.']
@@ -127,8 +145,87 @@ def simplify_address(address):
     else:
         simplified = address
         suffix = ''
-    
-    #print(f"原地址: {original_address}, 簡化地址: {simplified}, 後綴: {suffix}")
+
+    # 1) 街/路 + 阿拉伯數字(1~2位) + 段 -> 將阿拉伯數字轉為中文段號（支援到十位）
+    arabic_digits_map = {0: '零', 1: '一', 2: '二', 3: '三', 4: '四', 5: '五', 6: '六', 7: '七', 8: '八', 9: '九'}
+
+    def arabic_to_chinese_section(n: int) -> str:
+        if n <= 0:
+            return ''
+        if n < 10:
+            return arabic_digits_map[n]
+        tens, ones = divmod(n, 10)
+        if tens == 1:
+            return '十' + (arabic_digits_map[ones] if ones else '')
+        else:
+            return arabic_digits_map[tens] + '十' + (arabic_digits_map[ones] if ones else '')
+
+    def _road_digit_to_chinese(m):
+        road = m.group(1)
+        num_s = m.group(2)
+        num_s = num_s.lstrip('0')
+        if not num_s:
+            return f"{road}0段"
+        n = int(num_s)
+        if n >= 1 and n <= 99:
+            return f"{road}{arabic_to_chinese_section(n)}段"
+        else:
+            return f"{road}{num_s}段"
+
+    simplified = re.sub(r'([\u4e00-\u9fff]+(?:路|街))0*([1-9]\d?)段', _road_digit_to_chinese, simplified)
+
+    # 2) 街/路 + 中文數字 + 號 -> 將中文數字逐字或簡單單位解析為阿拉伯數字
+    char_to_digit = {'零': '0', '〇': '0', '一': '1', '二': '2', '三': '3', '四': '4', '五': '5',
+                     '六': '6', '七': '7', '八': '8', '九': '9'}
+
+    def chinese_to_arabic(s: str) -> str:
+        unit_chars = set('十百千')
+        if any(ch in unit_chars for ch in s):
+            digits_map = {'零': 0, '〇': 0, '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
+                          '六': 6, '七': 7, '八': 8, '九': 9}
+            unit_map = {'千': 1000, '百': 100, '十': 10}
+            total = 0
+            num = 0
+            for ch in s:
+                if ch in digits_map:
+                    num = digits_map[ch]
+                elif ch in unit_map:
+                    unit_val = unit_map[ch]
+                    if num == 0:
+                        num = 1
+                    total += num * unit_val
+                    num = 0
+                else:
+                    num = 0
+            total += num
+            return str(total)
+        else:
+            return ''.join(char_to_digit.get(ch, ch) for ch in s)
+
+    def _road_chinese_to_digit(m):
+        road = m.group(1)
+        chs = m.group(2)
+        arabic = chinese_to_arabic(chs)
+        return f"{road}{arabic}號"
+
+    simplified = re.sub(r'([\u4e00-\u9fff]+(?:路|街))([零〇一二三四五六七八九十百千]+)號', _road_chinese_to_digit, simplified)
+
+    # 若路/街 和 號 之間有其他文字，也嘗試把緊接在號前的中文數字轉為阿拉伯數字
+    def _convert_between_road_and_hao(m):
+        prefix = m.group(1)
+        chinese_digits = m.group(2)
+        return prefix + chinese_to_arabic(chinese_digits) + '號'
+
+    simplified = re.sub(r'([\u4e00-\u9fff]+(?:路|街).*?)([零〇一二三四五六七八九十百千]+)號', _convert_between_road_and_hao, simplified)
+
+    # 出函式前再確保數字為半形並回傳
+    simplified = fullwidth_to_halfwidth(simplified)
+    suffix = fullwidth_to_halfwidth(suffix)
+
+    # 號前的數字去除前導零，001 -> 1
+    simplified = re.sub(r"(\d+)號", lambda m: str(int(m.group(1))) + '號', simplified)
+    suffix = re.sub(r"(\d+)號", lambda m: str(int(m.group(1))) + '號', suffix)
+
     return original_address.strip(), simplified.strip(), suffix.strip()
 
 
@@ -163,6 +260,9 @@ def format_simplified_address(addr):
     # 去除「0」開頭的鄰編號，如 003鄰 ➜ 3鄰
     addr = re.sub(r'(\D)0*(\d+)鄰', r'\1\2鄰', addr)
 
+    # 號前的數字去除前導零，001 -> 1, 016 -> 16, 010 -> 10
+    addr = re.sub(r'(\d+)號', lambda m: str(int(m.group(1))) + '號', addr)
+
     # 阿拉伯數字轉中文段號（1~9段）
     num_to_chinese = {'1': '一', '2': '二', '3': '三', '4': '四', '5': '五',
                       '6': '六', '7': '七', '8': '八', '9': '九'}
@@ -193,16 +293,8 @@ def process_no_result_address(original_address):
     高上里特殊處理：須有「鄰」才放至「不含鄰的地址」欄
     """
     if "里" in original_address:
-        '''
-        for special_li in EXCEPTION_RULES.get("require_ling", []):
-            if special_li in original_address:
-                # 例外里須包含「鄰」才能保留
-                if re.search(r'\d+鄰', original_address):
-                    return original_address
-                else:
-                    return "查詢失敗"
-        '''
-        # 非例外里，只要有「里」就保留
+        if "桃園市" not in original_address:
+            original_address = f'桃園市{original_address}'
         return original_address
     else:
         return "查詢失敗"

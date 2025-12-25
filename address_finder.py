@@ -3,6 +3,7 @@ import os
 import json
 import unicodedata
 import time
+import subprocess
 import logging
 
 from openpyxl import load_workbook
@@ -13,6 +14,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 
 
 def setup_chrome_driver():
@@ -37,7 +39,7 @@ def setup_chrome_driver():
 
     # --- 系統級日誌抑制設定 ---
     # 將 Chrome 的內部 log 輸出導向無效位置
-    os.environ['CHROME_LOG_FILE'] = 'NUL'  # Windows 使用 NUL
+    os.environ['CHROME_LOG_FILE'] = os.devnull  # Windows 使用 'NUL'
     # os.environ['CHROME_LOG_FILE'] = '/dev/null'  # Linux/Mac 使用 /dev/null
 
     # 降低 Selenium 與 urllib3 的日誌輸出層級，只顯示警告以上訊息
@@ -45,7 +47,24 @@ def setup_chrome_driver():
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
     # 建立並回傳 WebDriver 物件
-    return webdriver.Chrome(options=options)
+    # Create a Service that sends chromedriver logs to devnull and hides the console window on Windows
+    try:
+        creationflags = subprocess.CREATE_NO_WINDOW
+    except Exception:
+        creationflags = 0
+
+    service = Service(log_path=os.devnull)
+    # If supported, set creationflags to avoid spawning visible console windows for the driver
+    try:
+        service.creationflags = creationflags
+    except Exception:
+        pass
+
+    # Additional runtime flags to reduce Chrome GPU/log noise
+    options.add_argument('--log-level=3')
+    options.add_argument('--disable-software-rasterizer')
+
+    return webdriver.Chrome(service=service, options=options)
 
 def load_exception_rules(json_path='exception_rules.json'): # 排除特定里鄰規則
     if os.path.exists(json_path):
