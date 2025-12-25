@@ -112,10 +112,23 @@ def search_address(driver, wait, address):
 
 def simplify_address(address):  # 查詢前地址簡化
     """
-    將地址簡化為：去除里、鄰與號後的文字，並將 '-' 替換為 '之'。
-    回傳：(原地址, 簡化地址, 後綴)
+    簡化輸入地址，供後續查詢用。
+
+    處理流程重點：
+    - 進函式時會先將全形數字轉成半形（例如 '三〇一' → '三0一' 再轉為 '301'）。
+    - 移除「里」與「鄰」段（依規則），並擷取「號」之後的後綴作為 suffix。
+    - 將地址內的 '-' 轉為 '之'。
+    - 在「路/街 + 阿拉伯數字 + 段」情況下，會把 1~9 的阿拉伯數字轉成中文段號（例如 '1段' → '一段'）。
+    - 在「路/街 ... 號」情況下，會把緊接於 `號` 前的中文數字逐字轉為阿拉伯數字（包括 '零'、'〇'、'一'~'九'，例如 '三〇一號' → '301號'；但不做單位換算，像 '三百零一號' 會保留原樣）。
+    - 若路/街與號之間存在其他文字（例如 '段'），仍會嘗試將緊接在『號』前的中文數字逐字轉為阿拉伯數字。
+    - 出函式前會再次將簡化結果中的全形數字轉為半形，回傳格式為 `(original_address, simplified_address, suffix)`。
+
+    備註：本函式僅做逐字對應的中文→阿拉伯數字轉換（非數值運算），如需把含單位的中文數字（十、百、千等）解析成整數，請告知以啟用單位解析。
     """
     original_address = address  # 保留原始輸入
+
+    # 進函式時先將全形數字轉為半形，方便後續處理
+    address = fullwidth_to_halfwidth(address)
 
     # 移除「里」與「鄰」段
     address = re.sub(r'([\u4e00-\u9fff]{1,5}區)[\u4e00-\u9fff]{1,2}里', r'\1', address)
@@ -139,9 +152,90 @@ def simplify_address(address):  # 查詢前地址簡化
         simplified = address
         suffix = ''
 
-    # 將簡化地址中的 '-' 取代為 '之'
-    simplified = simplified.replace('-', '之')
+    # 1) 街/路 + 阿拉伯數字(1~2位) + 段 -> 將阿拉伯數字轉為中文段號（支援到十位）
+    arabic_digits_map = {0: '零', 1: '一', 2: '二', 3: '三', 4: '四', 5: '五', 6: '六', 7: '七', 8: '八', 9: '九'}
 
+    def arabic_to_chinese_section(n: int) -> str:
+        # 支援 1..99 的轉換（十位處理）
+        if n <= 0:
+            return ''
+        if n < 10:
+            return arabic_digits_map[n]
+        tens, ones = divmod(n, 10)
+        if tens == 1:
+            # 10..19 -> 十, 十一, 十二...
+            return '十' + (arabic_digits_map[ones] if ones else '')
+        else:
+            return arabic_digits_map[tens] + '十' + (arabic_digits_map[ones] if ones else '')
+
+    def _road_digit_to_chinese(m):
+        road = m.group(1)
+        num_s = m.group(2)
+        # 移除前導零
+        num_s = num_s.lstrip('0')
+        if not num_s:
+            return f"{road}0段"
+        n = int(num_s)
+        if n >= 1 and n <= 99:
+            return f"{road}{arabic_to_chinese_section(n)}段"
+        else:
+            return f"{road}{num_s}段"
+
+    simplified = re.sub(r'([\u4e00-\u9fff]+(?:路|街))0*([1-9]\d?)段', _road_digit_to_chinese, simplified)
+
+    # 2) 街/路 + 中文數字 + 號 -> 將中文數字逐字對應為阿拉伯數字（不做單位換算）
+    char_to_digit = {'零': '0', '〇': '0', '一': '1', '二': '2', '三': '3', '四': '4', '五': '5',
+                     '六': '6', '七': '7', '八': '8', '九': '9'}
+
+    def chinese_to_arabic(s: str) -> str:
+        # 若包含單位則解析單位（支援到千位），否則作逐字映射
+        unit_chars = set('十百千')
+        if any(ch in unit_chars for ch in s):
+            digits_map = {'零': 0, '〇': 0, '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
+                          '六': 6, '七': 7, '八': 8, '九': 9}
+            unit_map = {'千': 1000, '百': 100, '十': 10}
+            total = 0
+            num = 0
+            for ch in s:
+                if ch in digits_map:
+                    num = digits_map[ch]
+                elif ch in unit_map:
+                    unit_val = unit_map[ch]
+                    if num == 0:
+                        num = 1
+                    total += num * unit_val
+                    num = 0
+                else:
+                    # 非中文數字或單位，跳過
+                    num = 0
+            total += num
+            return str(total)
+        else:
+            return ''.join(char_to_digit.get(ch, ch) for ch in s)
+
+    def _road_chinese_to_digit(m):
+        road = m.group(1)
+        chs = m.group(2)
+        arabic = chinese_to_arabic(chs)
+        return f"{road}{arabic}號"
+
+    simplified = re.sub(r'([\u4e00-\u9fff]+(?:路|街))([零〇一二三四五六七八九十百千]+)號', _road_chinese_to_digit, simplified)
+
+    # 若路/街 和 號 之間有其他文字（例如「段」），也嘗試把緊接在「號」前的中文數字逐字轉為阿拉伯數字
+    def _convert_between_road_and_hao(m):
+        prefix = m.group(1)  # 包含路/街及中間文字
+        chinese_digits = m.group(2)
+        return prefix + chinese_to_arabic(chinese_digits) + '號'
+
+    simplified = re.sub(r'([\u4e00-\u9fff]+(?:路|街).*?)([零〇一二三四五六七八九十百千]+)號', _convert_between_road_and_hao, simplified)
+    # 出函式前再確保數字為半形並回傳
+    simplified = fullwidth_to_halfwidth(simplified)
+    suffix = fullwidth_to_halfwidth(suffix)
+
+    # 號前的數字去除前導零，001 -> 1, 016 -> 16, 010 -> 10
+    simplified = re.sub(r"(\d+)號", lambda m: str(int(m.group(1))) + '號', simplified)
+    suffix = re.sub(r"(\d+)號", lambda m: str(int(m.group(1))) + '號', suffix)
+    #print(f"原地址: {original_address}, 簡化地址: {simplified}, 後綴: {suffix}")
     return original_address.strip(), simplified.strip(), suffix.strip()
 
 
@@ -178,6 +272,9 @@ def format_simplified_address(addr):
 
     # 去除「0」開頭的鄰編號，如 003鄰 ➜ 3鄰
     addr = re.sub(r'(\D)0*(\d+)鄰', r'\1\2鄰', addr)
+
+    # 號前的數字去除前導零，001 -> 1, 016 -> 16, 010 -> 10
+    addr = re.sub(r'(\d+)號', lambda m: str(int(m.group(1))) + '號', addr)
 
     # 阿拉伯數字轉中文段號（1~9段）
     num_to_chinese = {'1': '一', '2': '二', '3': '三', '4': '四', '5': '五',

@@ -1,6 +1,7 @@
 build/
 dist/
 *.spec
+__pycache__/
 
 address_finder/
 _internal/
@@ -9,3 +10,4 @@ _internal/
 *.exe
 責任區.xlsx
 
+test_simplify.py
